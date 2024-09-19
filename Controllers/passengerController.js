@@ -3,7 +3,7 @@ const jwt = require("jsonwebtoken");
 const { ACCESS_TOKEN_SECRET } = process.env;
 
 const addPassengers = async (req, res) => {
-  const { name, email, password } = req.body;
+  const { name, email, password, role } = req.body; 
 
   if (!name || !email || !password) {
     return res.status(400).json({ message: "Please fill required fields." });
@@ -15,12 +15,19 @@ const addPassengers = async (req, res) => {
     if (existingPassenger) {
       return res
         .status(400)
-        .json({ message: "Passenger already exist.please login." });
+        .json({ message: "Passenger already exists. Please login." });
     }
+
+    // Validate role
+    if (role && !["user", "admin"].includes(role)) {
+      return res.status(400).json({ message: "Invalid role specified." });
+    }
+
     const passenger = new Passenger({
       name,
       email,
       password,
+      role: role || "user", 
     });
 
     await passenger.save();
@@ -31,6 +38,7 @@ const addPassengers = async (req, res) => {
     return res.status(500).json({ error: error.message });
   }
 };
+
 
 const loginpassenger = async (req, res) => {
   const { email, password } = req.body;

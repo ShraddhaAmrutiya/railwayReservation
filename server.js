@@ -2,7 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 require("dotenv").config();
 PORT = process.env.PORT;
-const scheduler = require('./scheduler'); // Import scheduler
+const scheduler = require('./scheduler'); 
 
 const app = express();
 

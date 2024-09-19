@@ -38,4 +38,32 @@ const addMultipleSeats = async (req, res) => {
   }
 }
 
-module.exports={seatAdds,addMultipleSeats}
+const getAllSeats = async (req, res) => {
+  try {
+    const seats = await Seat.find(); 
+    res.status(200).json({ seats }); 
+  } catch (error) {
+    res.status(500).json({ message: 'Error retrieving seats', error: error.message });
+  }
+};
+
+
+const deleteSeat = async (req, res) => {
+  const { seatId } = req.params;
+
+  if (!mongoose.isValidObjectId(seatId)) {
+    return res.status(400).json({ message: 'Invalid seat ID.' });
+  }
+
+  try {
+    const result = await Seat.findByIdAndDelete(seatId);
+    if (!result) {
+      return res.status(404).json({ message: 'Seat not found.' });
+    }
+    res.status(200).json({ message: 'Seat deleted successfully.' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting seat', error: error.message });
+  }
+};
+
+module.exports={seatAdds,addMultipleSeats,getAllSeats,deleteSeat}
