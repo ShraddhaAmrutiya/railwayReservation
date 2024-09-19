@@ -16,5 +16,4 @@ router.get("/", listSchedules);
 router.get("/:id", getScheduleById);
 router.put("/:id",authMiddleware,isAdmin, updateSchedule);
 router.delete("/:id",authMiddleware, isAdmin,deleteSchedule);
-// router.get('/by-train/:trainName',getSchedulesByTrain)
 module.exports = router;

@@ -3,7 +3,7 @@ const mongoose = require("mongoose");
 require("dotenv").config();
 PORT = process.env.PORT;
 const scheduler = require('./scheduler'); 
-
+const logger = require('./logger');
 const app = express();
 
 const trainRouter=require('./Routes/trainRout');
@@ -16,9 +16,9 @@ app.use(express.json());
 
 mongoose
   .connect(process.env.URI)
-  .then(() => console.log("connected to mongodb..."))
+  .then(() => logger.info("connected to mongodb..."))
   .catch((error) =>
-    console.error("Error occured in mongodb connection", error)
+    logger.error("Error occured in mongodb connection", error)
   );
 
   app.use('/train',trainRouter)
@@ -26,5 +26,11 @@ mongoose
   app.use('/schedule',scheduleRouter)
   app.use('/seat',seatRouter)
   app.use('/reservation',reservationRouter)
+  
+  
+  app.use((err, req, res, next) => {
+    logger.error(`Error: ${err.message}`, { stack: err.stack });
+    res.status(500).json({ error: 'Something went wrong!' });
+  });
 
-app.listen(PORT, () => console.log("server is running.."));
+app.listen(PORT, () =>  logger.info("server is running.."));

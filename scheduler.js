@@ -9,23 +9,34 @@ const RESERVATION_CLOSE_HOURS = 3 * 60 * 60 * 1000;
 cron.schedule("*/10 * * * * *", async () => {
   try {
     const now = new Date();
-    const schedules = await Schedule.find();
+    logger.info('Cron job started', { currentTime: now });
 
+    const schedules = await Schedule.find();
+    if (schedules.length === 0) {
+      logger.warn('No schedules found');
+    }
+    
     await Promise.all(
       schedules.map(async (schedule) => {
-        const arrivalTime = new Date(schedule.arrivalTime);
-        const closeTime = new Date(
-          arrivalTime.getTime() - RESERVATION_CLOSE_HOURS
-        );
+        try {
+          const arrivalTime = new Date(schedule.arrivalTime);
+          const closeTime = new Date(
+            arrivalTime.getTime() - RESERVATION_CLOSE_HOURS
+          );
 
-        if (now >= closeTime && now < arrivalTime) {
-          await closeReservations(schedule._id);
+          if (now >= closeTime && now < arrivalTime) {
+            await closeReservations(schedule._id);
+            logger.info('Closed reservations for schedule', { scheduleId: schedule._id });
+          }
+
+          await checkAndConfirmWaitingReservations(schedule._id);
+          logger.info('Checked and confirmed waiting reservations for schedule', { scheduleId: schedule._id });
+        } catch (error) {
+          logger.error('Error processing schedule', { scheduleId: schedule._id, error: error.message });
         }
-
-        await checkAndConfirmWaitingReservations(schedule._id);
       })
     );
   } catch (error) {
-    console.error("Error running scheduled tasks:", error);
+    logger.error('Error running scheduled tasks', { error: error.message });
   }
 });

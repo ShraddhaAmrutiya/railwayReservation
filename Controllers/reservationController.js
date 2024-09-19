@@ -5,25 +5,30 @@ const Seat = require("../Models/seatSchema");
 const Schedule = require("../Models/scheduleSchema");
 const Train = require("../Models/trainSchema");
 const mongoose = require("mongoose");
-const RESERVATION_CLOSE_HOURS = 3 * 60 * 60 * 1000;
+const logger = require('../logger');
 const { createReservation, checkAndConfirmWaitingReservations,updateSeatAndTrain } = require("../function");
+const RESERVATION_CLOSE_HOURS = 3 * 60 * 60 * 1000;
+
 
 const makeReservation = async (req, res) => {
   const { passenger, seat, schedule } = req.body;
 
   if (!passenger || !schedule) {
+    logger.warn('Reservation attempt with missing required fields.');
     return res.status(400).json({ message: "Please fill required fields." });
   }
 
   try {
     const passengerDoc = await Passenger.findById(passenger);
     if (!passengerDoc) {
+      logger.warn(`Passenger with ID ${passenger} not registered.`);
       return res.status(400).json({ message: "Passenger not registered." });
     }
 
 
     const scheduleDoc = await Schedule.findById(schedule).populate("train");
     if (!scheduleDoc) {
+      logger.warn(`Schedule with ID ${schedule} not found.`);
       return res.status(400).json({ message: "Schedule not found." });
     }
 
@@ -31,6 +36,7 @@ const makeReservation = async (req, res) => {
       new Date() >
       new Date(scheduleDoc.departureTime) - RESERVATION_CLOSE_HOURS
     ) {
+      logger.warn(`Reservation attempt after closing time for schedule ID ${schedule}.`);
       return res.status(400).json({ message: "Reservation is closed." });
     }
 
@@ -47,18 +53,16 @@ const makeReservation = async (req, res) => {
     if (seat === null) {
       if (confirmedCount >= train.totalSeats) {
         if (waitingCount >= train.totalSeats) {
+          logger.warn(`Waiting list full for schedule ID ${schedule}.`);
           return res.status(400).json({ message: "Waiting list is full." });
         }
 
-        const reservation = await createReservation(
-          passenger,
-          null,
-          schedule,
-          "Waiting"
-        );
+        const reservation = await createReservation(passenger, null, schedule, "Waiting");
         await checkAndConfirmWaitingReservations(schedule);
+        logger.info(`Created waiting reservation for passenger ID ${passenger}.`);
         return res.status(201).json(reservation);
       } else {
+        logger.warn('Seat not selected but seat is required.');
         return res.status(400).json({ message: "Please select a seat." });
       }
     }
@@ -71,48 +75,43 @@ const makeReservation = async (req, res) => {
       });
 
       if (existingReservation) {
+        logger.warn(`Seat ${seat} already booked for schedule ID ${schedule}.`);
         return res.status(400).json({ message: "Seat is already booked." });
       }
 
       const seatDoc = await Seat.findById(seat);
       if (!seatDoc) {
+        logger.warn(`Seat with ID ${seat} not found.`);
         return res.status(400).json({ message: "Seat not found." });
       }
 
-      // if (!seatDoc.isAvailable) {
-      //   return res.status(400).json({ message: "Seat is not available." });
-      // }
     } else {
-      return res.status(400).json({ message: "Please select a seat." });
+      logger.warn('Seat not selected but seat is required.');
+      res.status(400).json({ message: "Please select a seat." });
     }
 
     if (confirmedCount >= train.totalSeats) {
       if (waitingCount >= train.totalSeats) {
+        logger.warn(`Waiting list full for schedule ID ${schedule}.`);
         return res.status(400).json({ message: "Waiting list is full." });
       }
 
-      const reservation = await createReservation(
-        passenger,
-        null,
-        schedule,
-        "Waiting"
-      );
+      const reservation = await createReservation(passenger, null, schedule, "Waiting");
       await checkAndConfirmWaitingReservations(schedule);
+      logger.info(`Created waiting reservation for passenger ID ${passenger}.`);
       return res.status(201).json(reservation);
     }
 
-    const reservation = await createReservation(
-      passenger,
-      seat,
-      schedule,
-      "Confirmed"
-    );
+    const reservation = await createReservation(passenger, seat, schedule, "Confirmed");
+
     if (seat) {
       const seatDoc = await Seat.findById(seat);
       await updateSeatAndTrain(seatDoc, train);
     }
+    logger.info(`Created confirmed reservation for passenger ID ${passenger}.`);
     res.status(201).json(reservation);
   } catch (error) {
+    logger.error(`Error creating reservation: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
 };
@@ -124,14 +123,17 @@ const cancelReservation = async (req, res) => {
   try {
     const reservation = await Reservation.findById(reservationId).populate("schedule");
     if (!reservation) {
+      logger.warn(`Reservation with ID ${reservationId} not found.`);
       return res.status(404).json({ message: "Reservation not found." });
     }
 
     if (reservation.status === "Canceled") {
+      logger.warn(`Reservation with ID ${reservationId} is already canceled.`);
       return res.status(400).json({ message: "Reservation is already canceled." });
     }
 
     if (!reservation.schedule) {
+      logger.warn(`Schedule for reservation ID ${reservationId} not found.`);
       return res.status(404).json({ message: "Schedule not found." });
     }
 
@@ -140,11 +142,9 @@ const cancelReservation = async (req, res) => {
     const cancelCloseTime = new Date(arrivalTime - RESERVATION_CLOSE_HOURS);
 
     if (now > cancelCloseTime) {
-      return res.status(400).json({
-        message: "Cannot cancel reservation within 3 hours of arrival.",
-      });
+      logger.warn(`Cannot cancel reservation with ID ${reservationId} within 3 hours of arrival.`);
+      return res.status(400).json({ message: "Cannot cancel reservation within 3 hours of arrival.", });
     }
-
     const freedSeat = reservation.seat;
     const train = await Train.findById(reservation.schedule.train);
 
@@ -156,18 +156,20 @@ const cancelReservation = async (req, res) => {
         if (seatDoc) {
           seatDoc.isAvailable = true;
           await seatDoc.save();
+          logger.info(`Freed seat with ID ${freedSeat} after waiting reservation cancellation.`);
         }
       }
 
       if (train) {
         train.availableSeats += 1;
         await train.save();
+        logger.info(`Updated available seats for train ID ${train._id} after waiting reservation cancellation.`);
       }
 
       return res.status(200).json({ message: "Waiting reservation deleted successfully." });
     } else if (reservation.status === "Confirmed") {
       if (!freedSeat) {
-        // If seat is null, give an error and delete the reservation
+        logger.warn(`Reservation with ID ${reservationId} is missing seat information and was deleted.`);
         await Reservation.findByIdAndDelete(reservationId);
         return res.status(400).json({
           message: "Please register again. Reservation is missing seat information.",
@@ -182,12 +184,14 @@ const cancelReservation = async (req, res) => {
         if (seatDoc) {
           seatDoc.isAvailable = true;
           await seatDoc.save();
+          logger.info(`Freed seat with ID ${freedSeat} after confirmed reservation cancellation.`);
         }
       }
 
       if (train) {
         train.availableSeats += 1;
         await train.save();
+        logger.info(`Updated available seats for train ID ${train._id} after confirmed reservation cancellation.`);
       }
 
       const waitingReservations = await Reservation.find({
@@ -214,12 +218,13 @@ const cancelReservation = async (req, res) => {
 
         await Promise.all(updatePromises);
         await train.save();
+        logger.info(`Updated waiting reservations and seat availability after confirmed reservation cancellation.`);
       }
 
       return res.status(200).json({ message: "Reservation canceled successfully." });
     }
   } catch (error) {
-    console.log(error);
+    logger.error(`Error canceling reservation: ${error.message}`);
     return res.status(500).json({
       message: "An error occurred during reservation cancellation.",
       error,
@@ -240,9 +245,11 @@ const getReservationStatusByPassengerId = async (req, res) => {
       .populate("schedule.train", "trainName")
       .populate("passenger", "name");
 
-    res.json(reservations);
+      logger.info(`Retrieved reservations for passenger ID ${req.params.passengerId}.`);
+      return res.status(200).json(reservations);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    logger.error(`Error retrieving reservations for passenger ID ${req.params.passengerId}: ${error.message}`);
+    return res.status(500).json({ error: error.message });
   }
 };
 
@@ -250,6 +257,7 @@ const getWaitingListCountByTrainId = async (req, res) => {
   const { trainId } = req.params;
 
   if (!trainId || !mongoose.Types.ObjectId.isValid(trainId)) {
+    logger.warn(`Invalid train ID ${trainId} provided.`);
     return res.status(400).json({ message: "Invalid or missing train ID." });
   }
 
@@ -265,12 +273,14 @@ const getWaitingListCountByTrainId = async (req, res) => {
       status: "Waiting",
     });
     const waitingCount = waitingReservations.length;
-    res.json({
+    logger.info(`Retrieved waiting list count for train ID ${trainId}.`);
+    return res.status(200).json({
       trainId,
       trainName: train.trainName,
       waitingCount,
     });
   } catch (error) {
+    logger.error(`Error retrieving waiting list count for train ID ${trainId}: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
 };
@@ -278,6 +288,7 @@ const getConfirmedByTrainId = async (req, res) => {
   const { trainId } = req.params;
 
   if (!trainId || !mongoose.Types.ObjectId.isValid(trainId)) {
+    logger.warn(`Invalid train ID ${trainId} provided.`);
     return res.status(400).json({ message: "Invalid or missing train ID." });
   }
 
@@ -294,7 +305,8 @@ const getConfirmedByTrainId = async (req, res) => {
     })
       .populate("seat", "seatNumber")
       .populate("passenger", "name");
-
+      
+      logger.info(`Retrieved confirmed reservations for train ID ${trainId}.`);
     return res.status(200).json({
       confirmedReservations: confirmedReservations.map(
         ({ _id, passenger, seat, status, reservationTime }) => ({
@@ -307,6 +319,7 @@ const getConfirmedByTrainId = async (req, res) => {
       ),
     });
   } catch (error) {
+    logger.error(`Error retrieving confirmed reservations for train ID ${trainId}: ${error.message}`);
     res.status(500).json({ error: error.message });
   }
 };
@@ -321,6 +334,7 @@ const getNotConfirmedReservations = async (req, res) => {
     }).populate("passenger", "name");
 
     if (notConfirmedReservations.length === 0) {
+      logger.info(`No non-confirmed reservations found for schedule ID ${scheduleId}.`);
       return res.status(404).json({ message: "No non-confirmed reservations found." });
     }
 
@@ -330,13 +344,13 @@ const getNotConfirmedReservations = async (req, res) => {
         passengerName,
       };
     });
-
+    logger.info(`Retrieved ${notConfirmedReservations.length} non-confirmed reservations for schedule ID ${scheduleId}.`);
     return res.status(200).json({
       number_of_non_confirmed_passengers: notConfirmedReservations.length,
       passengers: passengerList,
     });
   } catch (error) {
-    console.error(error);
+    logger.error(`Error retrieving non-confirmed reservations for schedule ID ${scheduleId}: ${error.message}`);
     return res.status(500).json({
       error: "An error occurred while retrieving non-confirmed reservations.",
     });
