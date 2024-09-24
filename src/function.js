@@ -3,23 +3,19 @@ const Seat = require("./Models/seatSchema");
 const Schedule = require("./Models/scheduleSchema");
 const Train = require("./Models/trainSchema");
 const logger = require('./logger');
+const moment = require('moment-timezone');
 
 const RESERVATION_CLOSE_HOURS = 3 * 60 * 60 * 1000;
-
 
 const createReservation = async (passenger, seat, schedule, status) => {
   try {
     const scheduleDoc = await Schedule.findById(schedule).populate('train');
-    if (!scheduleDoc) {
-      logger.error('Schedule not found', { scheduleId: schedule });
-      throw new Error('Schedule not found');
-    }
-
-    const arrivalTime = new Date(scheduleDoc.arrivalTime);
-    const closeTime = new Date(arrivalTime.getTime() - RESERVATION_CLOSE_HOURS);
+    
+    const departureTime = new Date(scheduleDoc.departureTime);
+    const closeTime = new Date(departureTime.getTime() - RESERVATION_CLOSE_HOURS);
     const now = new Date();
 
-    if (now >= closeTime && now < arrivalTime) {
+    if (now >= closeTime && now < departureTime) {
       logger.warn('Reservation closed', { scheduleId: schedule, currentTime: now });
       throw new Error("Reservation is closed.");
     }
@@ -27,73 +23,53 @@ const createReservation = async (passenger, seat, schedule, status) => {
     const reservation = new Reservation({ passenger, seat, schedule, status });
     await reservation.save();
     logger.info('Reservation created', { reservationId: reservation._id, passenger, seat, schedule, status });
-    return reservation;
+    return { message: "Reservation created.", reservationId: reservation._id };
   } catch (error) {
     logger.error('Error creating reservation', { error: error.message, passenger, seat, schedule, status });
-    throw error;
+    throw new Error(error.message);
   }
 };
-
-
 const checkAndConfirmWaitingReservations = async (scheduleId) => {
+  
   try {
     const scheduleDoc = await Schedule.findById(scheduleId).populate('train');
-    if (!scheduleDoc) {
-      logger.error('Schedule not found', { scheduleId });
-      throw new Error('Schedule not found');
-    }
     const train = scheduleDoc.train;
-
     const waitingReservations = await Reservation.find({
       schedule: scheduleId,
       status: 'Waiting',
     }).sort({ reservationTime: 1 });
 
-    for (const reservation of waitingReservations) {
-      if (train.availableSeats > 0) {
-        reservation.status = 'Confirmed';
-        await reservation.save();
+    const reservationsToConfirm = waitingReservations.slice(0, train.availableSeats);
 
-        if (reservation.seat) {
-          const seatDoc = await Seat.findById(reservation.seat);
-          if (seatDoc) {
-            seatDoc.isAvailable = false;
-            await seatDoc.save();
-          } 
-        }
+    const reservationIdsToUpdate = []; 
+    const seatIdsToUpdate = []; 
+    await Reservation.updateMany(
+      { _id: { $in: reservationIdsToUpdate } },
+      { $set: { status: 'Confirmed' } }
+    );
 
-        train.availableSeats -= 1;
-        await train.save();
-       logger.info('Reservation confirmed', { reservationId: reservation._id, seat: reservation.seat, train: train._id });
-} else {
-        break;
-      }
+    if (seatIdsToUpdate.length > 0) {
+      await Seat.updateMany(
+        { _id: { $in: seatIdsToUpdate } },
+        { $set: { isAvailable: false } }
+      );
     }
-    
+    train.availableSeats -= reservationsToConfirm.length;
+    await train.save();
   } catch (error) {
     logger.error('Error confirming waiting reservations', { error: error.message, scheduleId });
   }
 };
 
+
 const closeReservations = async (scheduleId) => {
   try {
     const schedule = await Schedule.findById(scheduleId).populate('train');
-    
-    if (!schedule) {
-      logger.error('Schedule not found', { scheduleId });
-      return;
-    }
+    const departureTime = moment.tz(schedule.departureTime, 'Asia/Kolkata');
+    const closeTime = departureTime.clone().subtract(RESERVATION_CLOSE_HOURS, 'hours');
+    const now = moment.tz('Asia/Kolkata');
 
-    const arrivalTime = new Date(schedule.arrivalTime);
-    if (isNaN(arrivalTime.getTime())) {
-      logger.error('Invalid arrival time', { scheduleId, arrivalTime });
-      return; // Exit if arrival time is invalid
-    }
-
-    const closeTime = new Date(arrivalTime.getTime() - RESERVATION_CLOSE_HOURS);
-    const now = new Date();
-
-    if (now >= closeTime && now < arrivalTime) {
+    if (now.isSameOrAfter(closeTime) && now.isBefore(departureTime)) {
       await Reservation.updateMany(
         { schedule: scheduleId, status: 'Waiting' },
         { $set: { status: 'Not-Confirmed' } }
@@ -105,21 +81,21 @@ const closeReservations = async (scheduleId) => {
         seat: { $ne: null }
       }).populate('seat');
 
-      await Promise.all(waitingReservations.map(async (reservation) => {
-        if (reservation.seat) {
+      if (waitingReservations.length > 0) {
+        const reservation = waitingReservations[0];
+        if (reservation && reservation.seat) {
           reservation.seat.isAvailable = true;
           await reservation.seat.save();
+          await Reservation.findByIdAndDelete(reservation._id);
+          
+          const train = await Train.findById(reservation.schedule.train);
+          if (train) {
+            train.availableSeats += 1;
+            await train.save();
+          }
+          logger.info('Reservation closed', { reservationId: reservation._id, seat: reservation.seat });
         }
-
-        await Reservation.findByIdAndDelete(reservation._id);
-
-        const train = await Train.findById(reservation.schedule.train);
-        if (train) {
-          train.availableSeats += 1;
-          await train.save();
-        }
-        logger.info('Reservation closed', { reservationId: reservation._id, seat: reservation.seat });
-      }));
+      }
     }
   } catch (error) {
     logger.error('Error closing reservations', { error: error.message, scheduleId });
@@ -142,16 +118,14 @@ const updateSeatAndTrain = async (seatDoc, train) => {
     logger.info('Seat and train updated', { seatId: seatDoc._id, trainId: train._id });
   } catch (error) {
     logger.error('Error updating seat and train', { error: error.message, seatId: seatDoc._id, trainId: train._id });
-    throw error;
+    throw new Error(error.message);
   }
 };
-
-
-
 
 module.exports = {
   createReservation,
   checkAndConfirmWaitingReservations,
   closeReservations,
-  updateSeatAndTrain
+  updateSeatAndTrain,
+  
 };

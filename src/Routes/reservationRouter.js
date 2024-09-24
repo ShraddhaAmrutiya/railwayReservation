@@ -6,7 +6,7 @@ const {authMiddleware,isAdmin}=require('../middleware/jwt')
 
 
 
-router.post('/',authMiddleware, reservationController.makeReservation);
+router.post('/makeReservation',authMiddleware, reservationController.makeReservation);
 router.delete('/:reservationId',authMiddleware, reservationController.cancelReservation);
 
 router.get('/:passengerId',authMiddleware, reservationController.getReservationStatusByPassengerId);

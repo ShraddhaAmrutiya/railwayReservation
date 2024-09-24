@@ -5,8 +5,8 @@ const {authMiddleware,isAdmin}=require('../middleware/jwt')
 
 
 
-router.post('/',authMiddleware,isAdmin,addTrains)
-router.get('/',getTrains)
+router.post('/add',authMiddleware,isAdmin,addTrains)
+router.get('/list',getTrains)
 router.put('/:id',authMiddleware,isAdmin,updateTrain)
 router.delete('/:id',authMiddleware,isAdmin,deleteTrain)
 

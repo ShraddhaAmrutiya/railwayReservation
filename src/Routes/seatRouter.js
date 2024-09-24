@@ -5,9 +5,7 @@ const {authMiddleware,isAdmin}=require('../middleware/jwt')
 
 
 
-router.post('/',authMiddleware,isAdmin,seatAdds)
-router.get('/',getAllSeats)
-router.post('/addMultiple',authMiddleware,isAdmin,addMultipleSeats)
+router.get('/list',getAllSeats)
 router.delete('/:seatId',authMiddleware,isAdmin,deleteSeat)
 
 
