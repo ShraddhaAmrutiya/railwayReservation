@@ -19,16 +19,11 @@ const addPassengers = async (req, res) => {
       return res.status(400).json({ message: "Passenger already exists. Please login." });
     }
 
-    if (role && !["user", "admin"].includes(role)) {
-      logger.warn("Invalid role specified: " + role);
-      return res.status(400).json({ message: "Invalid role specified." });
-    }
-
     const passenger = new Passenger({
       name,
       email,
       password,
-      role: role || "user", 
+      role:"user", 
     });
 
     await passenger.save();
